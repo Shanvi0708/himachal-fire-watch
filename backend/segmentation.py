@@ -25,17 +25,24 @@ PIXEL_AREA_M2 = 100  # 10m x 10m Sentinel-2 spatial resolution
 
 def resolve_weights_path() -> Path:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    target_path = MODELS_DIR / "deeplabv3_burnt_best.pth"
 
-    def find_weight_file() -> Path | None:
-        candidates = [
-            p for p in MODELS_DIR.rglob("*")
-            if p.is_file() and p.suffix != ".zip" and p.stat().st_size > 10_000_000
-        ]
-        return max(candidates, key=lambda p: p.stat().st_size) if candidates else None
+    def is_valid_torch_file(path: Path) -> bool:
+        if not path.is_file() or path.stat().st_size < 10_000_000:
+            return False
+        try:
+            torch.load(path, map_location="cpu", weights_only=False)
+            return True
+        except Exception:
+            return False
 
-    existing = find_weight_file()
-    if existing:
-        return existing
+    if is_valid_torch_file(target_path):
+        return target_path
+
+    # Purani galat extracted files saaf karein
+    for old in MODELS_DIR.iterdir():
+        if old.is_file():
+            old.unlink(missing_ok=True)
 
     print("Downloading DeepLabV3 weights from GitHub Release...")
     with requests.get(MODEL_URL, stream=True, timeout=180) as r:
@@ -45,18 +52,22 @@ def resolve_weights_path() -> Path:
                 if chunk:
                     f.write(chunk)
 
+    # Case 1: Downloaded file khud hi valid .pth model hai
+    if is_valid_torch_file(ZIP_PATH):
+        ZIP_PATH.replace(target_path)
+        return target_path
+
+    # Case 2: Downloaded file ek real .zip folder hai jiske andar .pth file hai
     with zipfile.ZipFile(ZIP_PATH, "r") as zf:
-        extracted_names = zf.namelist()
-        print("Extracted zip contents:", extracted_names)
         zf.extractall(MODELS_DIR)
     ZIP_PATH.unlink(missing_ok=True)
     gc.collect()
 
-    found = find_weight_file()
-    if not found:
-        raise FileNotFoundError(f"No weight file >10MB found after extracting: {extracted_names}")
-    return found
+    for p in MODELS_DIR.rglob("*"):
+        if is_valid_torch_file(p):
+            return p
 
+    raise FileNotFoundError("Downloaded file does not contain a valid PyTorch checkpoint.")
 class BurnScarSegmenter:
     def __init__(self, weights_path: Path = MODEL_PATH):
         self.weights_path = weights_path
@@ -90,7 +101,7 @@ class BurnScarSegmenter:
             model.load_state_dict(state_dict, strict=False)
             del ckpt, state_dict
             gc.collect()
-            
+
 
             model.to(DEVICE).eval()
             self.model = model
