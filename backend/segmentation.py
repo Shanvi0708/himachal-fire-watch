@@ -19,7 +19,7 @@ MODEL_PATH = MODELS_DIR / "deeplabv3_burnt_best.pth"
 ZIP_PATH = MODELS_DIR / "deeplabv3_burnt_best.pth.zip"
 MODEL_URL = "https://github.com/Shanvi0708/himachal-fire-watch/releases/download/v1.0.0/deeplabv3_burnt_best.pth.zip"
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cpu")
 PIXEL_AREA_M2 = 100  # 10m x 10m Sentinel-2 spatial resolution
 
 
@@ -27,19 +27,16 @@ def resolve_weights_path() -> Path:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     target_path = MODELS_DIR / "deeplabv3_burnt_best.pth"
 
-    def is_valid_torch_file(path: Path) -> bool:
+    def is_valid_torch_zip(path: Path) -> bool:
         if not path.is_file() or path.stat().st_size < 10_000_000:
             return False
-        try:
-            torch.load(path, map_location="cpu", weights_only=False)
-            return True
-        except Exception:
-            return False
+        with open(path, "rb") as f:
+            return f.read(4) == b"PK\x03\x04"
 
-    if is_valid_torch_file(target_path):
+    if is_valid_torch_zip(target_path):
         return target_path
 
-    # Purani galat extracted files saaf karein
+    # Clean up any partial or invalid files
     for old in MODELS_DIR.iterdir():
         if old.is_file():
             old.unlink(missing_ok=True)
@@ -52,43 +49,43 @@ def resolve_weights_path() -> Path:
                 if chunk:
                     f.write(chunk)
 
-    # Case 1: Downloaded file khud hi valid .pth model hai
-    if is_valid_torch_file(ZIP_PATH):
+    # Check if the downloaded file itself is a PyTorch checkpoint or a zip folder
+    try:
+        with zipfile.ZipFile(ZIP_PATH, "r") as zf:
+            names = zf.namelist()
+            if any(n.endswith("data.pkl") for n in names):
+                ZIP_PATH.replace(target_path)
+                return target_path
+            zf.extractall(MODELS_DIR)
+    except zipfile.BadZipFile:
         ZIP_PATH.replace(target_path)
         return target_path
 
-    # Case 2: Downloaded file ek real .zip folder hai jiske andar .pth file hai
-    with zipfile.ZipFile(ZIP_PATH, "r") as zf:
-        zf.extractall(MODELS_DIR)
     ZIP_PATH.unlink(missing_ok=True)
     gc.collect()
 
     for p in MODELS_DIR.rglob("*"):
-        if is_valid_torch_file(p):
+        if is_valid_torch_zip(p):
             return p
 
-    raise FileNotFoundError("Downloaded file does not contain a valid PyTorch checkpoint.")
+    raise FileNotFoundError("No valid PyTorch checkpoint found after extraction.")
+
+
 class BurnScarSegmenter:
     def __init__(self, weights_path: Path = MODEL_PATH):
         self.weights_path = weights_path
         self.model = None
         self.loaded = False
         self.load_error = None
-        self._load_weights()
 
     def _load_weights(self) -> None:
+        if self.loaded and self.model is not None:
+            return
         try:
             if not self.weights_path.exists():
                 self.weights_path = resolve_weights_path()
 
-            print(f"Loading DeepLabV3 weights from: {self.weights_path}")
-            ckpt = torch.load(self.weights_path, map_location=DEVICE, weights_only=False)
-            state_dict = (
-                ckpt["model_state_dict"]
-                if isinstance(ckpt, dict) and "model_state_dict" in ckpt
-                else ckpt
-            )
-
+            gc.collect()
             model = deeplabv3_resnet50(weights=None)
             old_conv = model.backbone.conv1
             model.backbone.conv1 = nn.Conv2d(
@@ -98,15 +95,23 @@ class BurnScarSegmenter:
             if model.aux_classifier is not None:
                 model.aux_classifier[4] = nn.Conv2d(256, 1, kernel_size=1)
 
-            model.load_state_dict(state_dict, strict=False)
+            ckpt = torch.load(
+                self.weights_path, map_location="cpu", weights_only=False, mmap=True
+            )
+            state_dict = (
+                ckpt["model_state_dict"]
+                if isinstance(ckpt, dict) and "model_state_dict" in ckpt
+                else ckpt
+            )
+            model.load_state_dict(state_dict, strict=False, assign=True)
             del ckpt, state_dict
             gc.collect()
 
-
-            model.to(DEVICE).eval()
+            model.eval()
             self.model = model
             self.loaded = True
-            print("DeepLabV3 model loaded successfully!")
+            self.load_error = None
+            print("DeepLabV3 model loaded successfully with mmap!")
         except Exception as e:
             traceback.print_exc()
             self.load_error = f"{type(e).__name__}: {e}"
@@ -147,6 +152,7 @@ class BurnScarSegmenter:
         raw = np.nan_to_num(raw[:6], nan=0.0, posinf=0.0, neginf=0.0)
         orig_h, orig_w = int(raw.shape[1]), int(raw.shape[2])
 
+        # Per-band Z-score standardization
         band_mean = np.mean(raw, axis=(1, 2), keepdims=True).astype(np.float32)
         band_std = np.std(raw, axis=(1, 2), keepdims=True).astype(np.float32)
         model_norm = ((raw - band_mean) / np.maximum(band_std, 1e-6)).astype(np.float32)
@@ -160,6 +166,9 @@ class BurnScarSegmenter:
             logits = self.model(tensor_in)["out"]
             prob_map = torch.sigmoid(logits).squeeze().cpu().numpy().astype(np.float32)
 
+        del tensor_in, logits
+        gc.collect()
+
         prob_map = cv2.resize(prob_map, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
         pred_mask = (prob_map >= float(threshold)).astype(np.uint8)
 
@@ -170,6 +179,7 @@ class BurnScarSegmenter:
         nbr = (raw[3] - raw[5]) / (raw[3] + raw[5] + 1e-6)
         mean_nbr = round(float(np.mean(nbr)), 3)
 
+        # 2nd-98th percentile stretch for RGB & False-Color visualization
         p2 = np.percentile(raw, 2, axis=(1, 2), keepdims=True).astype(np.float32)
         p98 = np.percentile(raw, 98, axis=(1, 2), keepdims=True).astype(np.float32)
         vis_norm = np.clip((raw - p2) / np.maximum(p98 - p2, 1e-6), 0.0, 1.0).astype(np.float32)
