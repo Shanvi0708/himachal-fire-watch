@@ -11,7 +11,7 @@ venv/
 .venv/
 
 # Large Model Weights & GeoTIFFs (GitHub 100MB limit)
-
+*.pth
 *.pt
 *.tif
 *.tiff
