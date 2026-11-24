@@ -9,6 +9,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from dotenv import load_dotenv
 from database import engine, init_db
+from pathlib import Path
+import shutil
+import tempfile
+from pathlib import Path
+import traceback
+
+BASE_DIR = Path(__file__).resolve().parent
+SAMPLE_PATCHES_DIR = BASE_DIR / "sample_patches"
+from fastapi import File, Form, HTTPException, UploadFile
 from segmentation import segmenter
 load_dotenv()
 
@@ -148,24 +157,58 @@ def get_incidents(
         rows = conn.execute(query, params).mappings().all()
 
     return {"count": len(rows), "incidents": [dict(r) for r in rows]}
+
+
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB upload limit
+
+
 @app.post("/api/segment")
-async def segment_burn_scar(
+def segment_geotiff(
     file: UploadFile = File(...),
-    threshold: float = Query(0.5, ge=0.05, le=0.95)
+    threshold: float = Form(0.5),
 ):
-    if not file.filename.lower().endswith((".tif", ".tiff")):
-        raise HTTPException(status_code=400, detail="Only .tif or .tiff GeoTIFF files are supported.")
+    if not file.filename or not file.filename.lower().endswith((".tif", ".tiff")):
+        raise HTTPException(status_code=400, detail="Please upload a valid .tif GeoTIFF file.")
 
+    if not (0.05 <= threshold <= 0.95):
+        raise HTTPException(status_code=400, detail="Threshold must be between 0.05 and 0.95.")
+
+    tmp_path = None
     try:
-        file_bytes = await file.read()
-        return segmenter.predict_tif(file_bytes, file.filename, threshold=threshold)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Segmentation inference failed: {exc}")
-from pathlib import Path
+        with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            total_bytes = 0
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Uploaded GeoTIFF exceeds the 25 MB size limit.",
+                    )
+                tmp.write(chunk)
 
-SAMPLE_PATCHES_DIR = Path(__file__).resolve().parent / "sample_patches"
+        return segmenter.predict_tif(
+            tmp_path=tmp_path,
+            filename=file.filename,
+            threshold=threshold,
+        )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail="Segmentation inference failed on the server. Check backend logs.",
+        )
+    finally:
+        file.file.close()
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 @app.get("/api/sample-patches")
 def list_sample_patches():
@@ -179,7 +222,11 @@ def segment_sample_patch(patch_name: str, threshold: float = Query(0.5, ge=0.05,
     patch_path = (SAMPLE_PATCHES_DIR / patch_name).resolve()
     if patch_path.parent != SAMPLE_PATCHES_DIR.resolve() or not patch_path.exists():
         raise HTTPException(status_code=404, detail="Sample patch not found.")
-    return segmenter.predict_tif(patch_path.read_bytes(), patch_path.name, threshold=threshold)  
+    return segmenter.predict_tif(
+        tmp_path=patch_path,
+        filename=patch_name,
+        threshold=threshold,
+    )  
 
 from pydantic import BaseModel
 
