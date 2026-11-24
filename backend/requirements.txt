@@ -3,12 +3,13 @@ fastapi
 uvicorn
 python-multipart
 sqlalchemy
-torch
-torchvision
-rasterio
-pillow
+pandas
 numpy
 requests
 python-dotenv
 pydantic
+pillow
 opencv-python-headless
+rasterio
+torch
+torchvision
