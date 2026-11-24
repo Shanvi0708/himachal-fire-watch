@@ -1,0 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+streamlit
+folium
+streamlit-folium
+requests
+pandas
+numpy
+torch
+torchvision
+rasterio
+pillow
+python-dotenv
