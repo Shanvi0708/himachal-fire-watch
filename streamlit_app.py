@@ -85,8 +85,8 @@ with st.sidebar:
     else:
         st.info("**Public Advisory Mode** (Read-Only)")
         with st.expander("🔐 Forest Officer Login"):
-            email = st.text_input("Officer Email", value="dfo.bilaspur@hpforest.gov.in")
-            pw = st.text_input("Password", type="password", value="hpforest2026")
+            email = st.text_input("Officer Email", placeholder="Enter official email")
+            pw = st.text_input("Password", type="password", placeholder="Enter password")
             if st.button("Sign In", type="primary", use_container_width=True):
                 user = OFFICER_ACCOUNTS.get(email.strip().lower())
                 if user and user["pw"] == pw:
