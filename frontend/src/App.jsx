@@ -18,9 +18,7 @@ import {
   Eye,
   UserCheck,
 } from "lucide-react";
-
-const API_BASE = "http://127.0.0.1:8000";
-
+const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 const DISTRICTS = [
   { n: "Chamba", lat: 32.55, lon: 76.13, risk: 0.55 },
   { n: "Kangra", lat: 32.10, lon: 76.27, risk: 0.78 },
