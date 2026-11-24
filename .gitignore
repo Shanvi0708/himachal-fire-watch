@@ -1,0 +1,22 @@
+# Environment & Secrets
+.env
+backend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.db
+venv/
+.venv/
+
+# Large Model Weights & GeoTIFFs (GitHub 100MB limit)
+*.pth
+*.pt
+*.tif
+*.tiff
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+.DS_Store
