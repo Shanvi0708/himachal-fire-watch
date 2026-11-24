@@ -1,6 +1,28 @@
 import base64
 from pathlib import Path
 import tempfile
+import zipfile
+import requests
+
+
+MODELS_DIR = Path(__file__).resolve().parent / "models"
+MODEL_PATH = MODELS_DIR / "deeplabv3_burnt_best.pth"
+ZIP_PATH = MODELS_DIR / "deeplabv3_burnt_best.pth.zip"
+MODEL_URL = "https://github.com/Shanvi0708/himachal-fire-watch/releases/download/v1.0.0/deeplabv3_burnt_best.pth.zip"
+
+def ensure_model_weights():
+    if MODEL_PATH.exists():
+        return
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    with requests.get(MODEL_URL, stream=True, timeout=120) as r:
+        r.raise_for_status()
+        with open(ZIP_PATH, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
+    with zipfile.ZipFile(ZIP_PATH, "r") as zf:
+        zf.extractall(MODELS_DIR)
+    if ZIP_PATH.exists():
+        ZIP_PATH.unlink()
 
 import cv2
 import numpy as np
