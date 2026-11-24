@@ -143,8 +143,8 @@ export default function App() {
     return saved ? JSON.parse(saved) : null;
   });
   const [showLoginModal, setShowLoginModal] = useState(false);
-  const [loginId, setLoginId] = useState("dfo.bilaspur@hpforest.gov.in");
-  const [loginPass, setLoginPass] = useState("hpforest2026");
+  const [loginId, setLoginId] = useState("");
+  const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
 
