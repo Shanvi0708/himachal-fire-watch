@@ -25,9 +25,17 @@ PIXEL_AREA_M2 = 100  # 10m x 10m Sentinel-2 spatial resolution
 
 def resolve_weights_path() -> Path:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    matches = list(MODELS_DIR.rglob("*.pth"))
-    if matches:
-        return matches[0]
+
+    def find_weight_file() -> Path | None:
+        candidates = [
+            p for p in MODELS_DIR.rglob("*")
+            if p.is_file() and p.suffix != ".zip" and p.stat().st_size > 10_000_000
+        ]
+        return max(candidates, key=lambda p: p.stat().st_size) if candidates else None
+
+    existing = find_weight_file()
+    if existing:
+        return existing
 
     print("Downloading DeepLabV3 weights from GitHub Release...")
     with requests.get(MODEL_URL, stream=True, timeout=180) as r:
@@ -38,15 +46,16 @@ def resolve_weights_path() -> Path:
                     f.write(chunk)
 
     with zipfile.ZipFile(ZIP_PATH, "r") as zf:
+        extracted_names = zf.namelist()
+        print("Extracted zip contents:", extracted_names)
         zf.extractall(MODELS_DIR)
     ZIP_PATH.unlink(missing_ok=True)
     gc.collect()
 
-    matches = list(MODELS_DIR.rglob("*.pth"))
-    if not matches:
-        raise FileNotFoundError(f"Zip extracted, but no .pth file found inside {MODELS_DIR}.")
-    return matches[0]
-
+    found = find_weight_file()
+    if not found:
+        raise FileNotFoundError(f"No weight file >10MB found after extracting: {extracted_names}")
+    return found
 
 class BurnScarSegmenter:
     def __init__(self, weights_path: Path = MODEL_PATH):
@@ -81,6 +90,7 @@ class BurnScarSegmenter:
             model.load_state_dict(state_dict, strict=False)
             del ckpt, state_dict
             gc.collect()
+            
 
             model.to(DEVICE).eval()
             self.model = model
